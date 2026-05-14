@@ -4,7 +4,15 @@
   "model": "deepseek-chat",
   "batch_size": 10,
   "sleep_sec": 1.0,
-  "input_file": "output/plant_glyco_simple.xlsx",
-  "output_dir": "output-1",
-  "output_file": "output/glycosylation_sites_identified.xlsx"
+  "abstract_max_len": 500,
+
+  "input_file":  "output/pubmed_results.xlsx",
+  "output_dir":  "output-1",
+  "output_file": "output/filtered_results.xlsx",
+
+  "result_key": "is_relevant",
+
+  "system_prompt": "你是一位专业的文献分析专家，严格按照给定标准判断每篇文献是否符合筛选条件，不得猜测或捏造信息。",
+
+  "user_prompt_template": "请分析以下 {n} 篇文献，判断每篇是否符合筛选条件。\n\n筛选条件：\n1. 文献涉及植物蛋白质的糖基化研究\n2. 文献包含糖基化位点的鉴定或定位信息\n3. 使用了质谱、生物信息学或实验方法鉴定糖基化位点\n\n请严格按照以下 JSON 格式返回结果，不要输出任何其他内容：\n{{\n  \"articles\": [\n    {{\n      \"pmid\": \"文献PMID\",\n      \"is_relevant\": true,\n      \"confidence\": \"high\",\n      \"reason\": \"简短判断理由\"\n    }}\n  ]\n}}\n\n文献列表：\n{articles}"
 }

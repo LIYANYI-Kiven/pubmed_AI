@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-分析PubMed文献是否包含植物蛋白质糖基化位点鉴定
+PubMed 文献 AI 筛选工具
+根据用户自定义的筛选条件，通过 AI API 对文献进行批量分析和筛选。
+筛选条件通过 api_config.json 中的 system_prompt / user_prompt_template 配置。
 """
 
 import json
@@ -12,44 +14,40 @@ from openpyxl.styles import Alignment, Font, PatternFill
 import requests
 
 
-class GlycosylationAnalyzer:
+class LiteratureAnalyzer:
     """
-    使用API分析文献是否包含糖基化位点鉴定
+    通用文献分析器，通过 AI API 对文献进行批量筛选。
     """
-    
-    def __init__(self, api_url: str, api_key: str = None, model: str = "gpt-4"):
+
+    def __init__(self, api_url: str, api_key: str, model: str,
+                 system_prompt: str, user_prompt_template: str,
+                 result_key: str, abstract_max_len: int = 500):
         """
-        初始化分析器
-        
         Args:
-            api_url: API端点URL
-            api_key: API密钥（如果需要）
-            model: 使用的模型名称
+            api_url:               AI API 端点（兼容 OpenAI 格式）
+            api_key:               API 密钥
+            model:                 模型名称
+            system_prompt:         系统提示词，描述 AI 的角色和任务
+            user_prompt_template:  用户提示词模板，{n} 替换为文献数量，{articles} 替换为文献列表
+            result_key:            JSON 结果中用于判断是否保留文献的布尔字段名
+            abstract_max_len:      摘要最大字符数，超出则截断
         """
         self.api_url = api_url
-        self.api_key = api_key
         self.model = model
+        self.system_prompt = system_prompt
+        self.user_prompt_template = user_prompt_template
+        self.result_key = result_key
+        self.abstract_max_len = abstract_max_len
         self.headers = {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
         }
-        if api_key:
-            self.headers["Authorization"] = f"Bearer {api_key}"
-    
-    def analyze_batch(self, articles: List[Dict[str, str]], batch_num: int) -> Dict:
+
+    def analyze_batch(self, articles: List[Dict], batch_num: int) -> Dict:
         """
-        分析一批文献
-        
-        Args:
-            articles: 文献列表
-            batch_num: 批次编号
-            
-        Returns:
-            分析结果字典
+        分析一批文献，返回结构化结果。
         """
-        # 构建提示词
         prompt = self._build_prompt(articles)
-        
-        # 调用API
         try:
             response = requests.post(
                 self.api_url,
@@ -57,354 +55,260 @@ class GlycosylationAnalyzer:
                 json={
                     "model": self.model,
                     "messages": [
-                        {
-                            "role": "system",
-                            "content": "你是一个生物信息学专家，专门分析植物蛋白质糖基化研究文献，严格遵循判断标准禁止欺骗用户。"
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
+                        {"role": "system", "content": self.system_prompt},
+                        {"role": "user",   "content": prompt}
                     ],
                     "temperature": 0.3
                 },
-                timeout=60
+                timeout=120
             )
-            
-            # 调试：打印响应信息
-            print(f"\n  [调试] 状态码: {response.status_code}")
-            print(f"  [调试] 响应头: {dict(response.headers)}")
-            print(f"  [调试] 响应文本前500字符: {response.text[:500]}")
-            
             response.raise_for_status()
-            
-            # 解析响应
+
             result = response.json()
-            
-            # 调试：打印API响应结构
-            print(f"  [调试] API响应结构: {list(result.keys())}")
-            
             content = result.get("choices", [{}])[0].get("message", {}).get("content", "{}")
-            
-            # 调试：打印content内容
-            print(f"  [调试] Content长度: {len(content)}")
-            print(f"  [调试] Content前200字符: {content[:200]}")
-            
-            # 清理markdown代码块标记
+
+            # 清理 markdown 代码块标记
             content = content.strip()
             if content.startswith("```json"):
-                content = content[7:]  # 移除 ```json
+                content = content[7:]
             elif content.startswith("```"):
-                content = content[3:]  # 移除 ```
+                content = content[3:]
             if content.endswith("```"):
-                content = content[:-3]  # 移除结尾的 ```
+                content = content[:-3]
             content = content.strip()
-            
-            # 解析JSON结果
+
             analysis_result = json.loads(content)
-            
             return {
                 "batch_num": batch_num,
                 "success": True,
                 "results": analysis_result.get("articles", [])
             }
-            
+
         except requests.exceptions.HTTPError as e:
-            error_msg = f"HTTP错误: {e}"
-            try:
-                error_detail = response.text[:500]
-                error_msg += f"\n响应内容: {error_detail}"
-            except:
-                pass
-            print(f"  ⚠️  批次 {batch_num} 分析失败: {error_msg}")
-            return {
-                "batch_num": batch_num,
-                "success": False,
-                "error": error_msg,
-                "results": []
-            }
+            msg = f"HTTP错误: {e}\n响应内容: {response.text[:300]}"
         except json.JSONDecodeError as e:
-            error_msg = f"JSON解析错误: {e}"
-            if 'response' in locals():
-                error_msg += f"\n响应状态码: {response.status_code}"
-                error_msg += f"\n响应内容: {response.text[:500]}"
-            if 'result' in locals():
-                error_msg += f"\nAPI结果: {str(result)[:500]}"
-            if 'content' in locals():
-                error_msg += f"\nContent值: '{content}'"
-            print(f"  ⚠️  批次 {batch_num} 分析失败: {error_msg}")
-            return {
-                "batch_num": batch_num,
-                "success": False,
-                "error": error_msg,
-                "response_text": response.text[:1000] if 'response' in locals() else "",
-                "results": []
-            }
+            raw = response.text[:300] if 'response' in locals() else "N/A"
+            msg = f"JSON解析错误: {e}\n响应内容: {raw}"
         except Exception as e:
-            error_msg = f"未知错误: {type(e).__name__}: {e}"
-            if 'response' in locals():
-                error_msg += f"\n响应状态码: {response.status_code}"
-                error_msg += f"\n响应内容: {response.text[:500]}"
-            print(f"  ⚠️  批次 {batch_num} 分析失败: {error_msg}")
-            import traceback
-            print(f"  [调试] 完整堆栈:\n{traceback.format_exc()}")
-            return {
-                "batch_num": batch_num,
-                "success": False,
-                "error": error_msg,
-                "results": []
-            }
-    
-    def _build_prompt(self, articles: List[Dict[str, str]]) -> str:
-        """
-        构建分析提示词
-        """
+            msg = f"{type(e).__name__}: {e}"
+
+        print(f"  ⚠️  批次 {batch_num} 失败: {msg}")
+        return {"batch_num": batch_num, "success": False, "error": msg, "results": []}
+
+    def _build_prompt(self, articles: List[Dict]) -> str:
         articles_text = []
         for i, article in enumerate(articles, 1):
-            # 限制摘要长度，避免提示词过长
-            abstract = article.get('Abstract', 'N/A')
-            # 处理NaN或非字符串类型
+            abstract = article.get("Abstract", "N/A")
             if not isinstance(abstract, str):
-                abstract = 'N/A'
-            elif len(abstract) > 500:
-                abstract = abstract[:500] + "..."
-            
+                abstract = "N/A"
+            elif len(abstract) > self.abstract_max_len:
+                abstract = abstract[:self.abstract_max_len] + "..."
+
             articles_text.append(
                 f"{i}. PMID:{article.get('PMID', 'N/A')}\n"
-                f"标题: {article.get('Title', 'N/A')}\n"
-                f"摘要: {abstract}\n"
+                f"Title: {article.get('Title', 'N/A')}\n"
+                f"Abstract: {abstract}\n"
             )
-        
-        prompt = f"""分析以下{len(articles)}篇文献，判断是否包含植物蛋白质糖基化位点鉴定。
 
-判断标准：
-1. 涉及植物蛋白质糖基化研究
-2. 包含糖基化位点鉴定/定位信息
-3. 使用质谱、生信或实验方法鉴定位点
+        return self.user_prompt_template.format(
+            n=len(articles),
+            articles="".join(articles_text)
+        )
 
-返回JSON格式（严格遵守格式）：
-{{
-  "articles": [
-    {{"pmid": "PMID", "contains_glycosylation_sites": true, "confidence": "high", "reason": "简短理由"}}
-  ]
-}}
 
-文献：
-{"".join(articles_text)}"""
-        
-        return prompt
-
+# ---------------------------------------------------------------------------
+# 工具函数
+# ---------------------------------------------------------------------------
 
 def load_excel(file_path: str) -> pd.DataFrame:
-    """
-    读取Excel文件
-    """
-    print(f"\n[1/4] 读取文献数据...")
+    print(f"\n[1/4] 读取文献数据: {file_path}")
     df = pd.read_excel(file_path)
-    print(f"  ✅ 读取 {len(df)} 篇文献")
+    print(f"  ✅ 共 {len(df)} 篇文献")
     return df
 
 
-def split_into_batches(df: pd.DataFrame, batch_size: int = 20) -> List[List[Dict]]:
-    """
-    将数据分批
-    """
-    print(f"\n[2/4] 分批处理（每批 {batch_size} 篇）...")
-    batches = []
-    records = df.to_dict('records')
-    
-    for i in range(0, len(records), batch_size):
-        batch = records[i:i + batch_size]
-        batches.append(batch)
-    
-    print(f"  ✅ 共分为 {len(batches)} 批")
+def split_into_batches(df: pd.DataFrame, batch_size: int) -> List[List[Dict]]:
+    print(f"\n[2/4] 分批（每批 {batch_size} 篇）...")
+    records = df.to_dict("records")
+    batches = [records[i:i + batch_size] for i in range(0, len(records), batch_size)]
+    print(f"  ✅ 共 {len(batches)} 批")
     return batches
 
 
-def analyze_batches(
-    batches: List[List[Dict]], 
-    analyzer: GlycosylationAnalyzer,
-    output_dir: str = "output-1",
-    sleep_sec: float = 1.0
-) -> List[str]:
-    """
-    分析所有批次并保存JSON文件
-    """
-    print(f"\n[3/4] 调用API分析文献...")
+def analyze_batches(batches: List[List[Dict]], analyzer: LiteratureAnalyzer,
+                    output_dir: str, sleep_sec: float) -> List[str]:
+    print(f"\n[3/4] 调用 AI API 分析文献...")
     os.makedirs(output_dir, exist_ok=True)
-    
     json_files = []
-    
+
     for i, batch in enumerate(batches, 1):
         print(f"  处理批次 {i}/{len(batches)}...", end=" ", flush=True)
-        
-        # 分析批次
         result = analyzer.analyze_batch(batch, i)
-        
-        # 保存JSON文件
+
         json_file = os.path.join(output_dir, f"batch_{i:03d}.json")
         with open(json_file, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
-        
         json_files.append(json_file)
-        
-        if result["success"]:
-            print(f"✅ 已保存到 {json_file}")
-        else:
-            print(f"❌ 失败")
-        
-        # 避免API限流
+
+        print("✅" if result["success"] else "❌")
+
         if i < len(batches):
             time.sleep(sleep_sec)
-    
-    print(f"  ✅ 完成所有批次分析")
+
+    print(f"  ✅ 全部批次处理完成")
     return json_files
 
 
-def compile_results(json_files: List[str], original_df: pd.DataFrame, output_file: str):
-    """
-    读取所有JSON文件并整理成Excel
-    """
-    print(f"\n[4/4] 整理结果...")
-    
-    # 收集所有分析结果
-    all_results = {}
+def compile_results(json_files: List[str], original_df: pd.DataFrame,
+                    output_file: str, result_key: str):
+    print(f"\n[4/4] 整理筛选结果...")
+
+    # 汇总所有 AI 分析结果
+    all_results: Dict[str, Dict] = {}
+    success_count = 0
     for json_file in json_files:
         with open(json_file, "r", encoding="utf-8") as f:
             data = json.load(f)
-            if data.get("success"):
-                for article in data.get("results", []):
-                    pmid = article.get("pmid")
-                    if pmid:
-                        all_results[pmid] = article
-    
-    # 筛选包含糖基化位点的文献
-    filtered_records = []
+        if data.get("success"):
+            success_count += 1
+            for article in data.get("results", []):
+                pmid = str(article.get("pmid", ""))
+                if pmid:
+                    all_results[pmid] = article
+
+    print(f"  成功批次: {success_count}/{len(json_files)}")
+    print(f"  获得分析结果: {len(all_results)} 篇")
+
+    # 筛选符合条件的文献
+    filtered = []
     for _, row in original_df.iterrows():
         pmid = str(row.get("PMID", ""))
-        if pmid in all_results:
-            result = all_results[pmid]
-            if result.get("contains_glycosylation_sites"):
-                record = row.to_dict()
-                record["Confidence"] = result.get("confidence", "unknown")
-                record["Analysis Reason"] = result.get("reason", "")
-                filtered_records.append(record)
-    
-    # 创建DataFrame
-    result_df = pd.DataFrame(filtered_records)
-    
-    if len(result_df) == 0:
-        print("  ⚠️  未找到包含糖基化位点鉴定的文献")
+        if pmid in all_results and all_results[pmid].get(result_key):
+            record = row.to_dict()
+            record["AI_Confidence"] = all_results[pmid].get("confidence", "")
+            record["AI_Reason"]     = all_results[pmid].get("reason", "")
+            filtered.append(record)
+
+    if not filtered:
+        print("  ⚠️  未筛选出符合条件的文献")
         return
-    
-    # 导出Excel
+
+    result_df = pd.DataFrame(filtered)
     result_df.reset_index(drop=True, inplace=True)
     result_df.index += 1
-    
+
+    os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
+
     with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
-        result_df.to_excel(writer, index=True, index_label="No.", sheet_name="Glycosylation Sites")
-        ws = writer.sheets["Glycosylation Sites"]
-        
+        result_df.to_excel(writer, index=True, index_label="No.", sheet_name="Results")
+        ws = writer.sheets["Results"]
+
         # 表头样式
-        fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
-        font = Font(bold=True, color="FFFFFF", size=11)
+        header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF", size=11)
         for cell in ws[1]:
-            cell.fill = fill
-            cell.font = font
+            cell.fill = header_fill
+            cell.font = header_font
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        
-        # 冻结首行
+
         ws.freeze_panes = "B2"
         ws.auto_filter.ref = ws.dimensions
-        
-        # 列宽
-        ws.column_dimensions["A"].width = 6
-        ws.column_dimensions["B"].width = 12
-        ws.column_dimensions["C"].width = 60
-        ws.column_dimensions["D"].width = 80
-        ws.column_dimensions["E"].width = 20
-        ws.column_dimensions["F"].width = 50
-        ws.column_dimensions["G"].width = 14
-        ws.column_dimensions["H"].width = 12
-        ws.column_dimensions["I"].width = 50
-        
+
+        # 自动列宽（简单估算）
+        col_widths = {"A": 6, "B": 12, "C": 60, "D": 80,
+                      "E": 20, "F": 50, "G": 14, "H": 12, "I": 60}
+        for col, width in col_widths.items():
+            ws.column_dimensions[col].width = width
+
         # 隔行变色
         even_fill = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
-        odd_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+        odd_fill  = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
         for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
-            fill = even_fill if row_idx % 2 == 0 else odd_fill
+            row_fill = even_fill if row_idx % 2 == 0 else odd_fill
             for cell in row:
-                cell.fill = fill
+                cell.fill = row_fill
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
             ws.row_dimensions[row_idx].height = 50
-    
-    print(f"  ✅ 筛选出 {len(result_df)} 篇包含糖基化位点鉴定的文献")
-    print(f"  📁 结果文件：{output_file}")
+
+    print(f"  ✅ 筛选出 {len(result_df)} 篇文献")
+    print(f"  📁 结果文件: {output_file}")
 
 
-def load_api_config(config_path: str = "api_config.json") -> Dict:
-    """
-    从JSON文件加载API配置
-    """
-    if os.path.exists(config_path):
-        with open(config_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+def load_api_config(path: str = "api_config.json") -> Dict:
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"配置文件不存在: {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
+
+# ---------------------------------------------------------------------------
+# 主函数
+# ---------------------------------------------------------------------------
 
 def main():
-    """
-    主函数
-    """
     print("=" * 70)
-    print("  植物蛋白质糖基化位点文献分析工具")
+    print("  PubMed 文献 AI 筛选工具")
     print("=" * 70)
-    
-    # 读取配置
+
     config = load_api_config()
-    
-    # 配置参数
-    INPUT_FILE = config.get("input_file", "output/plant_acely_simple.xlsx")
-    OUTPUT_DIR = config.get("output_dir", "output-1")
-    OUTPUT_FILE = config.get("output_file", "output/glycosylation_sites_identified.xlsx")
-    BATCH_SIZE = config.get("batch_size", 20)
-    SLEEP_SEC = config.get("sleep_sec", 1.0)
-    
-    # API配置
-    API_URL = config.get("api_url", "https://api.openai.com/v1/chat/completions")
-    API_KEY = config.get("api_key") or os.getenv("OPENAI_API_KEY")
-    MODEL = config.get("model", "gpt-4")
-    
+
+    INPUT_FILE   = config.get("input_file",  "output/pubmed_results.xlsx")
+    OUTPUT_DIR   = config.get("output_dir",  "output-1")
+    OUTPUT_FILE  = config.get("output_file", "output/filtered_results.xlsx")
+    BATCH_SIZE   = config.get("batch_size",  10)
+    SLEEP_SEC    = config.get("sleep_sec",   1.0)
+    API_URL      = config.get("api_url",     "https://api.openai.com/v1/chat/completions")
+    API_KEY      = config.get("api_key")     or os.getenv("OPENAI_API_KEY", "")
+    MODEL        = config.get("model",       "gpt-4o-mini")
+    RESULT_KEY   = config.get("result_key",  "is_relevant")
+    ABSTRACT_LEN = config.get("abstract_max_len", 500)
+
+    SYSTEM_PROMPT = config.get("system_prompt",
+        "You are an expert literature analyst. Evaluate each article strictly based on the given criteria.")
+
+    USER_PROMPT_TEMPLATE = config.get("user_prompt_template",
+        """Analyze the following {n} articles and determine whether each one meets the screening criteria.
+
+Return ONLY a JSON object in this exact format:
+{{
+  "articles": [
+    {{
+      "pmid": "PMID_VALUE",
+      "is_relevant": true,
+      "confidence": "high",
+      "reason": "brief reason"
+    }}
+  ]
+}}
+
+Articles:
+{articles}""")
+
     if not API_KEY or API_KEY == "your_api_key_here":
-        print("\n⚠️  警告：未设置API密钥")
-        print("请在 api_config.json 中设置 api_key 或设置环境变量 OPENAI_API_KEY")
-        print("示例：set OPENAI_API_KEY=your_api_key")
+        print("\n⚠️  未设置 API 密钥，请在 api_config.json 中填写 api_key")
         return
-    
-    print(f"\n配置信息：")
-    print(f"  输入文件：{INPUT_FILE}")
-    print(f"  输出目录：{OUTPUT_DIR}")
-    print(f"  输出文件：{OUTPUT_FILE}")
-    print(f"  批次大小：{BATCH_SIZE}")
-    print(f"  API模型：{MODEL}")
-    
-    # 读取数据
-    df = load_excel(INPUT_FILE)
-    
-    # 分批
-    batches = split_into_batches(df, BATCH_SIZE)
-    
-    # 初始化分析器
-    analyzer = GlycosylationAnalyzer(API_URL, API_KEY, MODEL)
-    
-    # 分析并保存JSON
+
+    print(f"\n  输入文件 : {INPUT_FILE}")
+    print(f"  输出目录 : {OUTPUT_DIR}")
+    print(f"  输出文件 : {OUTPUT_FILE}")
+    print(f"  批次大小 : {BATCH_SIZE}")
+    print(f"  模型     : {MODEL}")
+    print(f"  筛选字段 : {RESULT_KEY}")
+
+    df       = load_excel(INPUT_FILE)
+    batches  = split_into_batches(df, BATCH_SIZE)
+    analyzer = LiteratureAnalyzer(
+        api_url=API_URL, api_key=API_KEY, model=MODEL,
+        system_prompt=SYSTEM_PROMPT,
+        user_prompt_template=USER_PROMPT_TEMPLATE,
+        result_key=RESULT_KEY,
+        abstract_max_len=ABSTRACT_LEN
+    )
     json_files = analyze_batches(batches, analyzer, OUTPUT_DIR, SLEEP_SEC)
-    
-    # 整理结果
-    compile_results(json_files, df, OUTPUT_FILE)
-    
+    compile_results(json_files, df, OUTPUT_FILE, RESULT_KEY)
+
     print("\n" + "=" * 70)
-    print("  ✅ 分析完成！")
+    print("  ✅ 完成！")
     print("=" * 70 + "\n")
 
 
