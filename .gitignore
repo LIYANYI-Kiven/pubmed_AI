@@ -1,0 +1,27 @@
+# 输出文件（数据文件不上传）
+output/
+output-1/
+
+# IDE
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+~$*

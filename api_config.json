@@ -1,0 +1,10 @@
+{
+  "api_url": "https://api.deepseek.com/v1/chat/completions",
+  "api_key": "your_api_key_here",
+  "model": "deepseek-chat",
+  "batch_size": 10,
+  "sleep_sec": 1.0,
+  "input_file": "output/plant_glyco_simple.xlsx",
+  "output_dir": "output-1",
+  "output_file": "output/glycosylation_sites_identified.xlsx"
+}

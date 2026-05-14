@@ -1,0 +1,10 @@
+{
+  "date_start": "2021",
+  "date_end": "2026",
+  "api_key": null,
+  "batch_size": 100,
+  "sleep_sec": 0.4,
+  "out_file": "output/plant_glyco_simple.xlsx",
+  "query": "(((Plants[MeSH Terms] OR \"Plant Sciences\"[MeSH Terms] OR plant*[Title/Abstract] OR crop*[Title/Abstract] OR \"Oryza sativa\"[Title/Abstract] OR Arabidopsis[Title/Abstract] OR \"Zea mays\"[Title/Abstract]) AND (protein*[Title/Abstract] OR proteome*[Title/Abstract])) AND (\"Glycosylation\"[MeSH Terms] OR glycosylat*[Title/Abstract] OR \"glycan binding\"[Title/Abstract] OR \"N-glycosylation\"[Title/Abstract] OR \"O-glycosylation\"[Title/Abstract])) NOT \"Review\"[Publication Type]"
+}
+
