@@ -110,10 +110,11 @@ class LiteratureAnalyzer:
                 f"Abstract: {abstract}\n"
             )
 
-        return self.user_prompt_template.format(
-            n=len(articles),
-            articles="".join(articles_text)
-        )
+        # 只替换 {n} 和 {articles}，不处理其他花括号（如 JSON 示例中的 { }）
+        prompt = self.user_prompt_template
+        prompt = prompt.replace("{n}", str(len(articles)))
+        prompt = prompt.replace("{articles}", "".join(articles_text))
+        return prompt
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +239,19 @@ def load_api_config(path: str = "api_config.json") -> Dict:
     if not os.path.exists(path):
         raise FileNotFoundError(f"配置文件不存在: {path}")
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        config = json.load(f)
+
+    # 从外部文本文件加载提示词（优先级高于 JSON 内嵌）
+    for key, file_key in [("system_prompt", "system_prompt_file"),
+                           ("user_prompt_template", "user_prompt_file")]:
+        file_path = config.get(file_key)
+        if file_path:
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"提示词文件不存在: {file_path}（配置项: {file_key}）")
+            with open(file_path, "r", encoding="utf-8") as f:
+                config[key] = f.read()
+
+    return config
 
 
 # ---------------------------------------------------------------------------

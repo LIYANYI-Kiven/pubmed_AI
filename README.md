@@ -9,7 +9,7 @@
 ## 工作流程
 
 ```
-config.json          api_config.json
+config.json          api_config.json + prompts/
      │                      │
      ▼                      ▼
 pubmed-improved.py   analyze_glycosylation.py
@@ -59,7 +59,7 @@ pip install requests pandas openpyxl
 
 ### 如何构建检索式
 
-推荐在 [PubMed 网页端](https://pubmed.ncbi.nlm.nih.gov/advanced/) 的 Advanced Search 中构建检索式，确认结果数量后，复制 URL 中的 `term=` 参数，URL 解码后填入 `query` 字段。
+推荐在 [PubMed Advanced Search](https://pubmed.ncbi.nlm.nih.gov/advanced/) 中构建检索式，确认结果数量后，复制 URL 中的 `term=` 参数，URL 解码后填入 `query` 字段。
 
 **注意事项：**
 - 通配符 `*` 很重要：`plant*` 可匹配 plant/plants/planting，`protein*` 可匹配 protein/proteins/proteomics
@@ -97,7 +97,7 @@ python pubmed-improved.py
 
 ## Step 2：配置 AI 筛选
 
-编辑 `api_config.json`：
+### 2a. 编辑 api_config.json
 
 ```json
 {
@@ -114,13 +114,10 @@ python pubmed-improved.py
 
   "result_key": "is_relevant",
 
-  "system_prompt": "你是一位专业的文献分析专家，严格按照给定标准判断每篇文献是否符合筛选条件。",
-
-  "user_prompt_template": "请分析以下 {n} 篇文献，判断每篇是否符合筛选条件。\n\n筛选条件：\n1. 文献涉及植物蛋白质的糖基化研究\n2. 包含糖基化位点的鉴定或定位信息\n3. 使用了质谱、生信或实验方法鉴定位点\n\n请严格按照以下 JSON 格式返回，不要输出其他内容：\n{{\n  \"articles\": [\n    {{\"pmid\": \"PMID\", \"is_relevant\": true, \"confidence\": \"high\", \"reason\": \"简短理由\"}}\n  ]\n}}\n\n文献列表：\n{articles}"
+  "system_prompt_file": "prompts/system_prompt.txt",
+  "user_prompt_file":   "prompts/user_prompt.txt"
 }
 ```
-
-### 字段说明
 
 | 字段 | 说明 |
 |------|------|
@@ -134,8 +131,8 @@ python pubmed-improved.py
 | `output_dir` | 中间 JSON 文件保存目录 |
 | `output_file` | 最终筛选结果 Excel 路径 |
 | `result_key` | AI 返回 JSON 中的布尔判断字段名，需与提示词中一致 |
-| `system_prompt` | 系统提示词，定义 AI 角色 |
-| `user_prompt_template` | 用户提示词模板（见下方详细说明）|
+| `system_prompt_file` | 系统提示词文件路径 |
+| `user_prompt_file` | 用户提示词文件路径 |
 
 ### 支持的 AI API
 
@@ -152,54 +149,131 @@ python pubmed-improved.py
 
 ## 如何修改筛选条件（提示词）
 
-这是使用本工具最关键的配置。`user_prompt_template` 中有两个占位符：
+提示词保存在 `prompts/` 目录下的**纯文本文件**中，直接编辑即可，不需要任何转义字符：
 
-- `{n}` — 自动替换为当前批次的文献数量
-- `{articles}` — 自动替换为文献列表（PMID + 标题 + 摘要）
+```
+prompts/
+├── system_prompt.txt   # AI 角色定义
+└── user_prompt.txt     # 筛选条件和输出格式要求
+```
 
-**AI 返回的 JSON 必须包含：**
-- `pmid`：文献 PMID
-- `is_relevant`（或你在 `result_key` 中指定的字段名）：`true` / `false`
-- `confidence`：置信度，`high` / `medium` / `low`
-- `reason`：判断理由
+### user_prompt.txt 格式说明
+
+文件中有两个占位符会被自动替换：
+
+- `{n}` — 当前批次的文献数量
+- `{articles}` — 文献列表（PMID + 标题 + 摘要）
+
+**AI 返回的 JSON 必须包含以下字段：**
+
+| 字段 | 说明 |
+|------|------|
+| `pmid` | 文献 PMID |
+| `is_relevant` | 是否符合条件（`true` / `false`），字段名需与 `result_key` 一致 |
+| `confidence` | 置信度（`high` / `medium` / `low`）|
+| `reason` | 判断理由 |
 
 ### 提示词示例
 
-**示例 1：筛选包含临床试验数据的文献**
+**示例 1：筛选植物蛋白质糖基化位点鉴定文献（默认）**
 
-```json
-"system_prompt": "You are a clinical research expert. Evaluate articles strictly based on the given criteria.",
-
-"user_prompt_template": "Analyze the following {n} articles. Determine whether each one reports results from a clinical trial.\n\nCriteria:\n1. The study involves human participants\n2. It reports clinical outcomes or efficacy data\n3. It is a randomized controlled trial or observational study\n\nReturn ONLY this JSON:\n{{\n  \"articles\": [\n    {{\"pmid\": \"PMID\", \"is_relevant\": true, \"confidence\": \"high\", \"reason\": \"brief reason\"}}\n  ]\n}}\n\nArticles:\n{articles}"
+`prompts/system_prompt.txt`:
+```
+你是一位专业的文献分析专家，严格按照给定标准判断每篇文献是否符合筛选条件，不得猜测或捏造信息。
 ```
 
-**示例 2：筛选包含特定物种的研究**
+`prompts/user_prompt.txt`:
+```
+请分析以下 {n} 篇文献，判断每篇是否符合筛选条件。
 
-```json
-"system_prompt": "你是一位微生物学专家，专注于分析细菌耐药性研究文献。",
+筛选条件：
+1. 文献涉及植物蛋白质的糖基化研究
+2. 文献包含糖基化位点的鉴定或定位信息
+3. 使用了质谱、生物信息学或实验方法鉴定糖基化位点
 
-"user_prompt_template": "分析以下 {n} 篇文献，判断是否涉及大肠杆菌的抗生素耐药机制研究。\n\n筛选标准：\n1. 研究对象为大肠杆菌（E. coli）\n2. 涉及抗生素耐药性机制\n3. 包含实验数据\n\n返回 JSON：\n{{\n  \"articles\": [\n    {{\"pmid\": \"PMID\", \"is_relevant\": true, \"confidence\": \"high\", \"reason\": \"理由\"}}\n  ]\n}}\n\n文献：\n{articles}"
+请严格按照以下 JSON 格式返回结果，不要输出任何其他内容：
+{
+  "articles": [
+    {
+      "pmid": "文献PMID",
+      "is_relevant": true,
+      "confidence": "high",
+      "reason": "简短判断理由"
+    }
+  ]
+}
+
+文献列表：
+{articles}
 ```
 
-**示例 3：筛选包含特定实验方法的文献**
+---
 
-```json
-"system_prompt": "You are a proteomics expert specializing in mass spectrometry-based research.",
+**示例 2：筛选临床试验文献**
 
-"user_prompt_template": "Analyze {n} articles. Determine if each uses mass spectrometry to identify post-translational modifications.\n\nCriteria:\n1. Uses LC-MS/MS or similar mass spectrometry\n2. Identifies specific PTM sites (phosphorylation, ubiquitination, etc.)\n3. Provides site-level evidence\n\nReturn ONLY:\n{{\n  \"articles\": [\n    {{\"pmid\": \"PMID\", \"is_relevant\": true, \"confidence\": \"high\", \"reason\": \"reason\"}}\n  ]\n}}\n\nArticles:\n{articles}"
+`prompts/system_prompt.txt`:
+```
+You are a clinical research expert. Evaluate articles strictly based on the given criteria.
+```
+
+`prompts/user_prompt.txt`:
+```
+Analyze the following {n} articles. Determine whether each one reports results from a clinical trial.
+
+Criteria:
+1. The study involves human participants
+2. It reports clinical outcomes or efficacy data
+3. It is a randomized controlled trial or observational study
+
+Return ONLY this JSON, no other text:
+{
+  "articles": [
+    {"pmid": "PMID", "is_relevant": true, "confidence": "high", "reason": "brief reason"}
+  ]
+}
+
+Articles:
+{articles}
+```
+
+---
+
+**示例 3：筛选质谱鉴定翻译后修饰的文献**
+
+`prompts/system_prompt.txt`:
+```
+You are a proteomics expert specializing in mass spectrometry-based research.
+```
+
+`prompts/user_prompt.txt`:
+```
+Analyze {n} articles. Determine if each uses mass spectrometry to identify post-translational modifications.
+
+Criteria:
+1. Uses LC-MS/MS or similar mass spectrometry
+2. Identifies specific PTM sites (phosphorylation, ubiquitination, glycosylation, etc.)
+3. Provides site-level evidence
+
+Return ONLY this JSON:
+{
+  "articles": [
+    {"pmid": "PMID", "is_relevant": true, "confidence": "high", "reason": "reason"}
+  ]
+}
+
+Articles:
+{articles}
 ```
 
 ### 提示词编写建议
 
 1. **明确判断标准**：列出 2-4 条具体、可验证的标准，避免模糊描述
 2. **强调格式**：在提示词中明确要求"只返回 JSON，不输出其他内容"
-3. **result_key 保持一致**：`result_key` 字段名必须与提示词中 JSON 格式里的布尔字段名完全一致
+3. **result_key 保持一致**：`api_config.json` 中的 `result_key` 必须与提示词 JSON 格式里的布尔字段名完全一致
 4. **控制批次大小**：摘要较长时适当减小 `batch_size`（建议 5-10），避免超出模型 token 限制
 5. **语言一致性**：系统提示词和用户提示词建议使用同一语言
 
----
-
-## 运行 AI 筛选
+### 运行 AI 筛选
 
 ```bash
 python analyze_glycosylation.py
@@ -226,7 +300,7 @@ PubMed 下载的全部文献：
 
 ### output-1/batch_XXX.json
 
-每批 AI 分析的中间结果，格式如下：
+每批 AI 分析的中间结果：
 
 ```json
 {
@@ -242,8 +316,6 @@ PubMed 下载的全部文献：
   ]
 }
 ```
-
-中间结果保留在 `output-1/` 目录，方便排查问题或重新汇总。
 
 ### output/filtered_results.xlsx
 
@@ -261,13 +333,16 @@ PubMed 下载的全部文献：
 ```
 .
 ├── config.json                 # PubMed 检索配置
-├── api_config.json             # AI API 配置（含提示词）
+├── api_config.json             # AI API 配置
+├── prompts/
+│   ├── system_prompt.txt       # AI 角色定义（直接编辑，无需转义）
+│   └── user_prompt.txt         # 筛选条件和输出格式（直接编辑，无需转义）
 ├── pubmed-improved.py          # PubMed 文献下载脚本（推荐）
 ├── pubmed-simple.py            # PubMed 文献下载脚本（简化版）
 ├── analyze_glycosylation.py    # AI 文献筛选脚本
 ├── output/                     # 输出目录（不上传 git）
-│   ├── pubmed_results.xlsx     # 下载的全部文献
-│   └── filtered_results.xlsx  # AI 筛选后的文献
+│   ├── pubmed_results.xlsx
+│   └── filtered_results.xlsx
 └── output-1/                   # AI 分析中间结果（不上传 git）
     ├── batch_001.json
     └── ...
@@ -286,8 +361,8 @@ A：检查以下几点：
 **Q：AI 分析某批次失败怎么办？**  
 A：失败的批次会保存 `"success": false` 的 JSON 文件。可以减小 `batch_size` 后重新运行，程序会覆盖已有文件。
 
-**Q：如何只重新运行失败的批次？**  
-A：目前程序会重新处理所有批次。如需跳过已成功的批次，可以手动删除失败的 JSON 文件，然后修改代码中的起始批次编号。
-
-**Q：提示词中的 `{{` 和 `}}` 是什么？**  
-A：JSON 字符串中的 `{{` 和 `}}` 是对花括号的转义，实际传给 AI 的内容是 `{` 和 `}`。这是 Python `str.format()` 的语法要求。
+**Q：如何切换到不同的研究主题？**  
+A：只需修改三个地方：
+1. `config.json` 中的 `query` — 换成新的 PubMed 检索式
+2. `prompts/user_prompt.txt` — 换成新的筛选条件
+3. `prompts/system_prompt.txt` — 换成对应领域的专家角色描述
