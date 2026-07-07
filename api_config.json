@@ -1,7 +1,7 @@
 {
   "api_url":   "https://api.deepseek.com/v1/chat/completions",
-  "api_key":   "your_api_key_here",
-  "model":     "deepseek-chat",
+  "api_key":   "sk-b12c6d7d53a64f9cab0a2b97094e4709",
+  "model":     "deepseek-v4-pro",
   "batch_size": 10,
   "sleep_sec":  1.0,
   "abstract_max_len": 500,

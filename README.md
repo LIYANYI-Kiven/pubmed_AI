@@ -361,8 +361,133 @@ A：检查以下几点：
 **Q：AI 分析某批次失败怎么办？**  
 A：失败的批次会保存 `"success": false` 的 JSON 文件。可以减小 `batch_size` 后重新运行，程序会覆盖已有文件。
 
-**Q：如何切换到不同的研究主题？**  
+**Q：如何切换到不同的研究主题？**
 A：只需修改三个地方：
 1. `config.json` 中的 `query` — 换成新的 PubMed 检索式
 2. `prompts/user_prompt.txt` — 换成新的筛选条件
 3. `prompts/system_prompt.txt` — 换成对应领域的专家角色描述
+
+---
+
+## V2：全文版（读取全文 + AI 筛选参考文献）
+
+V1（上文）按检索式批量下载文献、再按摘要筛选。**V2 是一个独立的升级版本**，思路不同：
+给定一篇源文献的 PMID，V2 会在线读取它的**全文**，解析出它引用的**参考文献**，
+结合全文语境用 AI 从参考文献里挑出符合要求的文献（基于摘要）；再对**命中的**参考文献
+检查是否有可下载的 PDF，有则下载、提取全文文本投给 AI 做一次**基于全文的复查**。
+最终 Excel 同时包含摘要筛选结果与 PDF 全文复查结果。原 V1 文件全部保留，互不影响。
+
+### 处理流程
+
+```
+config_v2.json + prompts_v2/
+        │
+        ▼
+pubmed-fulltext-v2.py
+  ① PMID -> PMCID（elink）
+  ② 抓取 PMC 全文 XML（efetch，db=pmc）
+  ③ 解析全文正文 + 参考文献列表
+  ④ 对含 PMID 的参考文献补全摘要
+  ⑤ 结合全文，按提示词用 AI 逐批筛选参考文献（摘要级，"版本一结果"）
+  ⑥ 对命中的参考文献：查 PDF 链接（PMC OA / Unpaywall）→ 下载
+     → pypdf 提取文本 → AI 基于全文复查
+        │
+        ▼
+output-v2/reference_screening.xlsx + output-v2/pdfs/*.pdf
+```
+
+> 说明 1：全文读取依赖 **PMC 开放获取全文**。若某篇 PMID 在 PMC 没有开放全文，
+> 该篇会被跳过（程序会打印提示），这是 NCBI 数据可得性的限制，并非脚本错误。
+>
+> 说明 2：Chat Completions 接口**不接受二进制 PDF 上传**，因此 PDF 会先用 `pypdf`
+> 提取为文本再投给 AI。扫描件类 PDF 可能提取不到文本，会在结果中标注。
+
+### 安装依赖
+
+```bash
+pip install requests pandas openpyxl pypdf
+```
+
+（`pypdf` 仅 V2 的 PDF 全文复查需要；未安装时程序会自动跳过 PDF 步骤。）
+
+### 配置 config_v2.json
+
+```json
+{
+  "seed_pmids": ["38000000"],
+  "ncbi_api_key": null,
+  "ncbi_sleep_sec": 0.4,
+  "fulltext_max_len": 12000,
+  "enrich_references": true,
+  "ref_enrich_batch_size": 100,
+  "ai_api_url": "https://api.deepseek.com/v1/chat/completions",
+  "ai_api_key": null,
+  "ai_model": "deepseek-chat",
+  "ai_batch_size": 10,
+  "ai_sleep_sec": 1.0,
+  "ref_abstract_max_len": 500,
+  "result_key": "is_relevant",
+  "download_pdf": true,
+  "pdf_dir": "output-v2/pdfs",
+  "unpaywall_email": null,
+  "pdf_text_max_len": 30000,
+  "pdf_download_timeout": 60,
+  "system_prompt_file": "prompts_v2/system_prompt.txt",
+  "user_prompt_file": "prompts_v2/user_prompt.txt",
+  "pdf_system_prompt_file": "prompts_v2/pdf_system_prompt.txt",
+  "pdf_user_prompt_file": "prompts_v2/pdf_user_prompt.txt",
+  "out_file": "output-v2/reference_screening.xlsx"
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `seed_pmids` | 源文献 PMID 列表，可填多篇 |
+| `ncbi_api_key` | NCBI API Key（可选，提高速率）|
+| `fulltext_max_len` | 送入 AI 的源文献全文最大字符数，过长会截断 |
+| `enrich_references` | 是否对含 PMID 的参考文献联网补全摘要 |
+| `ai_api_key` | AI 密钥。**优先读环境变量 `AI_API_KEY`**，其次读此字段 |
+| `result_key` | AI 返回 JSON 中表示"符合条件"的布尔字段名 |
+| `download_pdf` | 是否对命中文献下载 PDF 并做全文复查（默认 true）|
+| `pdf_dir` | PDF 本地保存目录 |
+| `unpaywall_email` | 填写邮箱后启用 Unpaywall 按 DOI 找开放 PDF（可选）|
+| `pdf_text_max_len` | 送入 AI 的 PDF 文本最大字符数 |
+| `out_file` | 结果 Excel 路径 |
+
+> PDF 来源优先级：**PMC OA 开放服务**（按 PMID→PMCID），其次 **Unpaywall**（需填
+> `unpaywall_email`，按 DOI 查）。两者都只返回合法的开放获取 PDF，不绕过付费墙。
+
+### 提示词（prompts_v2/）
+
+摘要筛选用 `system_prompt.txt` / `user_prompt.txt`，PDF 全文复查用
+`pdf_system_prompt.txt` / `pdf_user_prompt.txt`。
+
+`user_prompt.txt` 支持占位符：`{fulltext}`（源文献全文）、`{n}`（批次参考文献数）、
+`{articles}`（参考文献列表）。`pdf_user_prompt.txt` 支持：`{pmid}`、`{title}`、
+`{pdftext}`（该篇参考文献的 PDF 全文文本）。修改筛选条件只需编辑对应文本文件。
+
+### 运行
+
+```bash
+# 推荐用环境变量传 AI 密钥，避免明文写进配置文件
+# Windows PowerShell:
+$env:AI_API_KEY="你的密钥"
+python pubmed-fulltext-v2.py
+```
+
+### 输出 output-v2/reference_screening.xlsx
+
+| 字段 | 说明 |
+|------|------|
+| Source PMID | 该参考文献来自哪篇源文献 |
+| Ref Index | 参考文献在源文献中的序号 |
+| PMID / DOI | 参考文献标识符（若可解析）|
+| Title / Authors / Source / Year | 参考文献题录 |
+| Abstract | 补全的摘要（含 PMID 时）|
+| AI_Confidence / AI_Reason | **摘要级**判断置信度与理由（版本一结果）|
+| PDF_URL / PDF_File | PDF 下载直链与本地文件路径 |
+| PDF_Relevant | **全文级**是否符合条件（true/false；无 PDF 时为空）|
+| PDF_Confidence / PDF_Reason | 基于 PDF 全文的复查置信度与理由 |
+
+> 安全提示：请勿把真实 API 密钥提交到仓库。建议用环境变量 `AI_API_KEY`，
+> 并将 `output-v2/` 加入 `.gitignore`。

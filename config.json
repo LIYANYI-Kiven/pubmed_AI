@@ -1,9 +1,9 @@
 {
-  "date_start": "2017",
+  "date_start": "2024",
   "date_end": "2025",
   "api_key": null,
   "batch_size": 100,
   "sleep_sec": 0.4,
   "out_file": "output/pubmed_results.xlsx",
-  "query": "(((Plants[MeSH Terms] OR \"Plant Sciences\"[MeSH Terms] OR plant*[Title/Abstract] OR crop*[Title/Abstract] OR \"Oryza sativa\"[Title/Abstract] OR Arabidopsis[Title/Abstract] OR \"Zea mays\"[Title/Abstract]) AND (protein*[Title/Abstract] OR proteome*[Title/Abstract])) AND (\"Glycosylation\"[MeSH Terms] OR glycosylat*[Title/Abstract] OR \"glycan binding\"[Title/Abstract] OR \"N-glycosylation\"[Title/Abstract] OR \"O-glycosylation\"[Title/Abstract])) NOT \"Review\"[Publication Type]"
+  "query": "(Arabidopsis[Title/Abstract] AND glycosylat*[Title/Abstract] AND (site*[Title/Abstract] OR \"mass spectrometry\"[Title/Abstract]) NOT \"Review\"[Publication Type])"
 }

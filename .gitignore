@@ -1,6 +1,8 @@
 # 输出文件（数据文件不上传）
 output/
 output-1/
+output-v2/
+test/output/
 
 # IDE
 .idea/
